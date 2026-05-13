@@ -9,12 +9,15 @@ import android.hardware.display.VirtualDisplay
 import android.media.ImageReader
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Base64
 import android.view.accessibility.AccessibilityEvent
 import kotlinx.coroutines.*
 import okhttp3.*
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
@@ -26,6 +29,8 @@ class AutoHelperService : AccessibilityService() {
     companion object {
         var mediaProjection: MediaProjection? = null
         var projectionReady: Boolean = false
+        var logCallback: ((String) -> Unit)? = null
+        var statusCallback: ((String) -> Unit)? = null
     }
 
     private val handler = Handler(Looper.getMainLooper())
@@ -43,6 +48,24 @@ class AutoHelperService : AccessibilityService() {
         .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
         .build()
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
+    override fun onCreate() {
+        super.onCreate()
+        createNotificationChannel()
+        appendLog("🔌 无障碍服务已创建")
+    }
+
+    private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = android.app.NotificationChannel(
+                "auto_helper",
+                "AI 自动助手",
+                android.app.NotificationManager.IMPORTANCE_LOW
+            )
+            val nm = getSystemService(android.app.NotificationManager::class.java)
+            nm.createNotificationChannel(channel)
+        }
+    }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -62,6 +85,14 @@ class AutoHelperService : AccessibilityService() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // 必须调用 startForeground，否则 Android 14+ 会崩溃
+        val notification = android.app.Notification.Builder(this, "auto_helper")
+            .setContentTitle("AI 自动助手")
+            .setContentText("运行中...")
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .build()
+        startForeground(1, notification)
+
         when (intent?.getStringExtra("action")) {
             "start" -> {
                 apiKey = intent.getStringExtra("api_key") ?: ""
@@ -167,13 +198,13 @@ class AutoHelperService : AccessibilityService() {
             .url("https://api.deepseek.com/v1/chat/completions")
             .header("Authorization", "Bearer $apiKey")
             .header("Content-Type", "application/json")
-            .post(RequestBody.create(MediaType.parse("application/json"), body.toString()))
+            .post(body.toString().toRequestBody("application/json".toMediaType()))
             .build()
 
         return try {
             val resp = client.newCall(req).execute()
             if (!resp.isSuccessful) { resp.close(); return null }
-            val json = JSONObject(resp.body()!!.string())
+            val json = JSONObject(resp.body!!.string())
             json.getJSONArray("choices")
                 .getJSONObject(0)
                 .getJSONObject("message")
@@ -243,8 +274,4 @@ class AutoHelperService : AccessibilityService() {
         logCallback?.invoke(msg)
     }
 
-    companion object {
-        var logCallback: ((String) -> Unit)? = null
-        var statusCallback: ((String) -> Unit)? = null
-    }
 }
